@@ -124,6 +124,165 @@ policy to look like the following::
         }
     }
 
+.. note::
+
+    In the custom method ``isAuthor`` we use the ``getIdentifier`` method that does not belong to
+    ``Authorization\IdentityInterface`` but from another ``IdentityInterface``: ``Authentication\IdentityInterface``.
+
+As described in 'Identity Objects <https://book.cakephp.org/authentication/3/en/identity-object.html>__ and more 
+over in 'Authorization Middleware <https://book.cakephp.org/authorization/3/en/middleware.html>__ we can use 
+``User`` entity for implementing both interfaces in **src/App/Model/Entity**::
+    
+    <?php
+    namespace App\Model\Entity;
+    
+    use Authorization\AuthorizationServiceInterface;
+    use Authorization\Policy\ResultInterface;
+    use Authorization\IdentityInterface as AuthorizationIdentity;
+    use Authentication\IdentityInterface as AuthenticationIdentity;
+    use Cake\ORM\Entity;
+    
+    class User extends Entity implements AuthorizationIdentity, AuthenticationIdentity
+    {
+        /**
+         * @inheritDoc
+         */
+        public function can(string $action, mixed $resource): bool
+        {
+            return $this->authorization->can($this, $action, $resource);
+        }
+    
+        /**
+         * @inheritDoc
+         */
+        public function canResult(string $action, mixed $resource): ResultInterface
+        {
+            return $this->authorization->canResult($this, $action, $resource);
+        }
+    
+        /**
+         * @inheritDoc
+         */
+        public function applyScope(string $action, mixed $resource, mixed ...$optionalArgs): mixed
+        {
+            return $this->authorization->applyScope($this, $action, $resource, ...$optionalArgs);
+        }
+    
+        /**
+         * @inheritDoc
+         */
+        public function getOriginalData(): \ArrayAccess|array
+        {
+            return $this;
+        }
+    
+        /**
+         * Setter to be used by the middleware.
+         */
+        public function setAuthorization(AuthorizationServiceInterface $service)
+        {
+            $this->authorization = $service;
+    
+            return $this;
+        }
+    
+        /**
+         * Authentication\IdentityInterface method
+         *
+         * @return string
+         */
+        public function getIdentifier()
+        {
+            return $this->id;
+        }
+    
+        // Other methods
+    }
+
+Then we can modify ``ArtciclePolicy`` to use ``User``::
+    
+    <?php
+    declare(strict_types=1);
+    
+    namespace App\Policy;
+    
+    use App\Model\Entity\Article;
+    
+    use App\Model\Entity\User;
+    
+    /**
+     * Article policy
+     */
+    class ArticlePolicy
+    {
+        /**
+         * Check if $user can add Article
+         *
+         * @param \Authorization\IdentityInterface $user The user.
+         * @param \App\Model\Entity\Article $article
+         * @return bool
+         */
+        public function canAdd(User $user, Article $article)
+        {
+            // All logged in users can create articles.
+            return true;
+        }
+    
+        /**
+         * Check if $user can edit Article
+         *
+         * @param \Authorization\IdentityInterface $user The user.
+         * @param \App\Model\Entity\Article $article
+         * @return bool
+         */
+        public function canEdit(User $user, Article $article)
+        {
+            // logged in users can edit their own articles.
+            return $this->isAuthor($user, $article);
+        }
+    
+        /**
+         * Check if $user can delete Article
+         *
+         * @param \Authorization\IdentityInterface $user The user.
+         * @param \App\Model\Entity\Article $article
+         * @return bool
+         */
+        public function canDelete(User $user, Article $article)
+        {
+            // logged in users can delete their own articles.
+            return $this->isAuthor($user, $article);
+        }
+    
+        /**
+         * Check if $user can view Article
+         *
+         * @param \Authorization\IdentityInterface $user The user.
+         * @param \App\Model\Entity\Article $article
+         * @return bool
+         */
+        public function canView(User $user, Article $article)
+        {
+            return true;
+        }
+        protected function isAuthor(User $user, Article $article)
+        {
+            return $article->user_id === $user->getIdentifier();
+        }
+    }
+
+After this update, we need to change something in ``Application::middleware`` to
+specify to use our ``User`` as ``IdentityDecorator``::
+
+        // In your Application::middleware() method;
+        
+        // Authorization
+        $middlewareQueue->add(new AuthorizationMiddleware($this, [
+            'identityDecorator' => function ($auth, $user) {
+                return $user->setAuthorization($auth);
+            }
+        ]));
+
 While we've defined some very simple rules, you can use as complex logic as your
 application requires in your policies.
 
